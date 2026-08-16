@@ -1,0 +1,3 @@
+# VPN keeps disconnecting or won't connect
+
+If your VPN connection keeps dropping or won't establish: 1) Restart the VPN client application completely (quit, don't just disconnect). 2) Check you're on a stable network — VPNs are sensitive to wifi signal drops. 3) Clear the VPN client's cache from Settings > Advanced > Clear Cache. 4) If using a personal wifi, try switching to a wired connection or mobile hotspot to rule out local network issues. 5) Confirm your VPN client is up to date — Settings > About > Check for Updates. If none of these resolve it after two attempts, submit a ticket with your operating system version and the exact error message shown.

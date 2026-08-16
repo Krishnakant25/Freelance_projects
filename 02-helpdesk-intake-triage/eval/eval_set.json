@@ -1,0 +1,93 @@
+{
+  "description": "End-to-end intake pipeline eval: red-flag scan -> deflection OR extraction+classification. Runs through app.intake.start_intake(), the actual entry point, not individual modules in isolation.",
+  "cases": [
+    {
+      "id": "deflect-vpn",
+      "description": "my VPN connection keeps dropping every couple of minutes",
+      "expect_outcome": "deflected",
+      "expect_kb_title_contains": "VPN"
+    },
+    {
+      "id": "deflect-excel",
+      "description": "excel keeps crashing whenever I try to open a big spreadsheet",
+      "expect_outcome": "deflected",
+      "expect_kb_title_contains": "Excel"
+    },
+    {
+      "id": "deflect-password",
+      "description": "I forgot my password and need to get back into my account",
+      "expect_outcome": "deflected",
+      "expect_kb_title_contains": "password"
+    },
+    {
+      "id": "no-deflect-vague-wifi",
+      "description": "the office wifi feels a bit slow today",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P2",
+      "note": "no KB article covers this specific complaint (below deflection threshold), and the text gives no impact/urgency signal at all -> both resolve UNKNOWN -> safe-default escalation (impact->department, urgency->medium) -> P2. This is the deliberate 'ambiguity escalates, never de-escalates' policy from rules_engine.py, not a bug — ambiguous vague reports get more attention, not less."
+    },
+    {
+      "id": "single-user-low-urgency",
+      "description": "just my monitor has a weird flicker sometimes, not urgent, whenever you get a chance",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P4"
+    },
+    {
+      "id": "single-user-high-urgency",
+      "description": "my laptop screen just went completely black and I need it working urgently for a client call in 20 minutes",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P2"
+    },
+    {
+      "id": "department-medium",
+      "description": "our whole team lost access to the shared project folder this morning",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P2",
+      "note": "department impact, urgency unstated -> escalates to medium via safe default -> P2"
+    },
+    {
+      "id": "department-high-urgency",
+      "description": "several people on my team are blocked and can't work because the CRM won't load for any of us",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1"
+    },
+    {
+      "id": "org-wide-critical",
+      "description": "the entire company is unable to access email this morning, this is critical",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1",
+      "expect_red_flag": true,
+      "note": "matches the outage red-flag pattern ('entire company ... unable') as well as landing on P1 via the rules engine independently (org impact x high urgency) — both paths agreeing is correct, not a conflict. An org-wide critical outage SHOULD trip immediate red-flag escalation rather than wait on LLM extraction."
+    },
+    {
+      "id": "redflag-ransomware",
+      "description": "we've detected ransomware on the finance department's file server, files are being encrypted right now",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1",
+      "expect_red_flag": true
+    },
+    {
+      "id": "redflag-databreach",
+      "description": "I think there's been a data breach — customer records may have been exposed",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1",
+      "expect_red_flag": true
+    },
+    {
+      "id": "redflag-phishing-lowkey-phrasing",
+      "description": "hey, quick one when you have time — I think I might have clicked a phishing link earlier, no big deal probably",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1",
+      "expect_red_flag": true,
+      "note": "red flag must override even when the USER downplays it (\"no big deal\", \"quick one\") — this is exactly the asymmetric-cost case from the architecture doc"
+    },
+    {
+      "id": "redflag-outage-not-deflected",
+      "description": "system is down for everyone, VPN completely unreachable",
+      "expect_outcome": "ticket_created",
+      "expect_priority": "P1",
+      "expect_red_flag": true,
+      "note": "would otherwise match the VPN KB article — red flag must suppress deflection entirely, a security/outage report should never be handed a self-help article instead of escalation"
+    }
+  ]
+}

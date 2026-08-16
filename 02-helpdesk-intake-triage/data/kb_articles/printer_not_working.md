@@ -1,0 +1,3 @@
+# Printer not printing or showing offline
+
+First, check the printer's display panel for any error message and note it down. Common fixes in order: 1) Restart the printer (power off, wait 10 seconds, power on). 2) On your computer, go to Settings > Printers, remove the printer, and re-add it. 3) Confirm you're on the office network, not a guest wifi — printers aren't reachable from guest networks. 4) Check paper tray and toner levels if the display shows a supply warning. If the printer shows a hardware error code, or these steps don't help, submit a ticket with the printer's location and the exact error code from its display.

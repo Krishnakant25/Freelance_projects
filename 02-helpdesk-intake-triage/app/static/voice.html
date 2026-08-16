@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Helpdesk Voice Intake</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171f30; --text: #e8ecf4; --muted: #8b93a7;
+    --accent: #4f8cff; --danger: #ff5a5a; --ok: #3ecf8e; --warn: #ffb84f;
+    --border: #2a334a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 32px; max-width: 640px; width: 100%;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  input[type=text] {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: #0d121d; color: var(--text); font-size: 1rem; margin-bottom: 16px;
+  }
+  textarea {
+    width: 100%; min-height: 100px; padding: 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: #0d121d; color: var(--text);
+    font-size: 1.05rem; resize: vertical; font-family: inherit;
+  }
+  .controls { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  button {
+    font-size: 1rem; padding: 12px 20px; border-radius: 10px; border: none;
+    cursor: pointer; font-weight: 600; transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #micBtn { background: var(--accent); color: white; display: flex; align-items: center; gap: 8px; }
+  #micBtn.listening { background: var(--danger); }
+  #submitBtn { background: var(--ok); color: #06251a; }
+  #resetBtn { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .status { margin-top: 14px; font-size: 0.9rem; color: var(--muted); min-height: 1.2em; }
+  .status.listening { color: var(--accent); }
+  .result { margin-top: 20px; padding: 18px; border-radius: 12px; border: 1px solid var(--border); display: none; }
+  .result.show { display: block; }
+  .result.deflected { background: #10241c; border-color: var(--ok); }
+  .result.ticket { background: #1c1730; border-color: var(--accent); }
+  .result.redflag { background: #2a1414; border-color: var(--danger); }
+  .result h3 { margin: 0 0 8px; font-size: 1.05rem; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.75rem;
+    font-weight: 700; margin-left: 8px; vertical-align: middle;
+  }
+  .badge.P1 { background: var(--danger); color: white; }
+  .badge.P2 { background: var(--warn); color: #241800; }
+  .badge.P3, .badge.P4 { background: #2a334a; color: var(--muted); }
+  .reasoning { font-size: 0.85rem; color: var(--muted); margin-top: 10px; font-family: monospace; }
+  .no-speech-warning {
+    display: none; background: #2a2414; border: 1px solid var(--warn); border-radius: 8px;
+    padding: 10px 14px; font-size: 0.85rem; margin-bottom: 16px; color: var(--warn);
+  }
+  .result-controls { margin-top: 14px; display: flex; gap: 10px; }
+  .result-controls button { padding: 8px 16px; font-size: 0.85rem; }
+  .btn-secondary { background: #2a334a; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Helpdesk Voice Intake</h1>
+  <p class="subtitle">Describe your issue by voice or by typing. Everything is processed by the same pipeline either way.</p>
+
+  <div id="noSpeechWarning" class="no-speech-warning">
+    Voice input isn't supported in this browser (try Chrome or Edge). You can still type your issue below — nothing here requires voice.
+  </div>
+
+  <label for="requester">Your name (optional)</label>
+  <input type="text" id="requester" placeholder="e.g. Priya">
+
+  <label for="description">Describe the issue</label>
+  <textarea id="description" placeholder="Click the mic and speak, or type here..." aria-live="polite"></textarea>
+
+  <div class="controls">
+    <button id="micBtn">🎤 <span id="micLabel">Start speaking</span></button>
+    <button id="submitBtn">Submit</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+
+  <div class="result" id="result" role="region" aria-live="polite"></div>
+</div>
+
+<script>
+const els = {
+  requester: document.getElementById('requester'),
+  description: document.getElementById('description'),
+  micBtn: document.getElementById('micBtn'),
+  micLabel: document.getElementById('micLabel'),
+  submitBtn: document.getElementById('submitBtn'),
+  resetBtn: document.getElementById('resetBtn'),
+  status: document.getElementById('status'),
+  result: document.getElementById('result'),
+  noSpeechWarning: document.getElementById('noSpeechWarning'),
+};
+
+// API base — same origin by default (this page is served by the FastAPI app
+// itself at /static/voice.html). Override if hosting the page separately.
+const API_BASE = '';
+
+let lastDeflection = null; // { article_id, query_text } — for the feedback/file-anyway flow
+
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.0;
+  window.speechSynthesis.speak(utter);
+}
+
+function setStatus(text, listening = false) {
+  els.status.textContent = text;
+  els.status.classList.toggle('listening', listening);
+}
+
+// --- Speech recognition (STT) ------------------------------------------
+const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognizer = null;
+let isListening = false;
+
+if (!SpeechRecognitionImpl) {
+  els.noSpeechWarning.style.display = 'block';
+  els.micBtn.disabled = true;
+  els.micLabel.textContent = 'Voice not supported — type instead';
+} else {
+  recognizer = new SpeechRecognitionImpl();
+  recognizer.continuous = false;
+  recognizer.interimResults = true;
+  recognizer.lang = 'en-US';
+
+  recognizer.onstart = () => {
+    isListening = true;
+    els.micBtn.classList.add('listening');
+    els.micLabel.textContent = 'Listening... (click to stop)';
+    setStatus('Listening — speak now', true);
+  };
+
+  recognizer.onresult = (event) => {
+    let transcript = '';
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    els.description.value = transcript;
+  };
+
+  recognizer.onerror = (event) => {
+    setStatus(`Voice input error: ${event.error}. You can type instead.`);
+  };
+
+  recognizer.onend = () => {
+    isListening = false;
+    els.micBtn.classList.remove('listening');
+    els.micLabel.textContent = 'Start speaking';
+    if (els.description.value.trim()) {
+      setStatus('Got it — review the text below, then Submit.');
+    } else {
+      setStatus('');
+    }
+  };
+
+  els.micBtn.addEventListener('click', () => {
+    if (isListening) {
+      recognizer.stop();
+    } else {
+      els.description.value = '';
+      recognizer.start();
+    }
+  });
+}
+
+// --- Submit flow ----------------------------------------------------------
+
+function renderTicketResult(data) {
+  const flagBanner = data.red_flag
+    ? `<div style="color:var(--danger);font-weight:700;margin-bottom:8px;">⚠ SECURITY/OUTAGE OVERRIDE APPLIED</div>`
+    : '';
+  els.result.className = `result show ${data.red_flag ? 'redflag' : 'ticket'}`;
+  els.result.innerHTML = `
+    ${flagBanner}
+    <h3>Ticket #${data.ticket_id} created <span class="badge ${data.priority}">${data.priority}</span></h3>
+    <div class="reasoning">${data.reasoning}</div>
+  `;
+  const spoken = data.red_flag
+    ? `This has been flagged as a security or outage issue and filed as priority 1. Ticket number ${data.ticket_id}. Someone will be notified immediately.`
+    : `Ticket ${data.ticket_id} created with priority ${data.priority}.`;
+  speak(spoken);
+}
+
+function renderDeflection(data, queryText) {
+  lastDeflection = { article_id: data.kb_article.id, query_text: queryText };
+  els.result.className = 'result show deflected';
+  els.result.innerHTML = `
+    <h3>We found something that might help</h3>
+    <p><strong>${data.kb_article.title}</strong></p>
+    <p>${data.kb_article.body}</p>
+    <div class="result-controls">
+      <button class="btn-secondary" id="resolvedBtn">This fixed it, thanks</button>
+      <button id="stillNeedHelpBtn">Still need help — file a ticket</button>
+    </div>
+  `;
+  speak(`I found a suggestion that might help. ${data.kb_article.title}. ${data.kb_article.body}`);
+
+  document.getElementById('resolvedBtn').addEventListener('click', async () => {
+    await fetch(`${API_BASE}/deflection/feedback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query_text: lastDeflection.query_text, kb_article_id: lastDeflection.article_id, resolved: true }),
+    });
+    els.result.innerHTML += '<p style="color:var(--ok);margin-top:10px;">Glad that helped!</p>';
+  });
+
+  document.getElementById('stillNeedHelpBtn').addEventListener('click', async () => {
+    setStatus('Filing a ticket...');
+    const resp = await fetch(`${API_BASE}/report/file-anyway`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: queryText, requester: els.requester.value }),
+    });
+    const data = await resp.json();
+    setStatus('');
+    renderTicketResult(data);
+  });
+}
+
+async function submitReport() {
+  const description = els.description.value.trim();
+  if (!description) {
+    setStatus('Please describe the issue first, by voice or typing.');
+    return;
+  }
+  els.submitBtn.disabled = true;
+  setStatus('Submitting...');
+  els.result.className = 'result';
+
+  try {
+    const resp = await fetch(`${API_BASE}/report`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, requester: els.requester.value }),
+    });
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+    const data = await resp.json();
+    setStatus('');
+    if (data.outcome === 'deflected') {
+      renderDeflection(data, description);
+    } else {
+      renderTicketResult(data);
+    }
+  } catch (err) {
+    setStatus(`Something went wrong: ${err.message}. Is the API server running?`);
+  } finally {
+    els.submitBtn.disabled = false;
+  }
+}
+
+els.submitBtn.addEventListener('click', submitReport);
+
+els.resetBtn.addEventListener('click', () => {
+  els.description.value = '';
+  els.requester.value = '';
+  els.result.className = 'result';
+  els.result.innerHTML = '';
+  setStatus('');
+  if (isListening) recognizer.stop();
+  window.speechSynthesis?.cancel();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Not receiving emails in Outlook
+
+If new emails aren't showing up in your Outlook inbox: 1) Check your Junk/Spam folder — filters sometimes misclassify legitimate senders. 2) Check Outlook > Rules and confirm no rule is silently moving or deleting incoming mail. 3) Confirm your mailbox isn't near its storage quota — go to File > Account Settings > Mailbox Cleanup to check size. 4) Try Outlook on the web (outlook.office.com) — if mail appears there but not in the desktop app, it's a sync issue: File > Account Settings > Repair. 5) Confirm the sender has your correct email address and isn't getting a bounce-back. If mail isn't arriving in Outlook on the web either, submit a ticket — this may be a server-side delivery issue.
