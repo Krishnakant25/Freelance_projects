@@ -1,0 +1,271 @@
+{
+  "description": "Deterministic retrieval + pipeline eval. No LLM call, no cost — meant to run on every change (architecture doc §6.7). Case types: standard (answer exists, must be found), acl_test (access control), and refusal (answer does NOT exist in the corpus and the system must say so rather than return a confident near-miss).",
+  "notes": {
+    "refusal_cases": "These calibrate ABSOLUTE_RELEVANCE_FLOOR. Without them the floor was tuned on 4 hand-picked examples, which is not enough to distinguish 'correctly refused' from 'broken and refusing everything'. A floor set too high fails these; a floor set too low fails them by inventing answers.",
+    "keyword_matching": "expected_keywords are checked case-insensitively against concatenated retrieved chunk text."
+  },
+  "cases": [
+    {
+      "id": "vacation-days",
+      "question": "How many vacation days do full-time employees get per year?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["18", "vacation"],
+      "top_k": 5
+    },
+    {
+      "id": "vacation-rollover",
+      "question": "How many unused vacation days can roll over to next year?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["10 days", "roll over"],
+      "top_k": 5
+    },
+    {
+      "id": "sick-days",
+      "question": "How many paid sick days are provided annually?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["10 paid sick days"],
+      "top_k": 5
+    },
+    {
+      "id": "parental-leave-primary",
+      "question": "How much paid parental leave does a primary caregiver receive?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["12 weeks", "primary caregiver"],
+      "top_k": 5
+    },
+    {
+      "id": "remote-work-days",
+      "question": "How many days a week can employees work remotely?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["remote", "3 days"],
+      "top_k": 5
+    },
+    {
+      "id": "remote-core-hours",
+      "question": "What are the core hours remote employees must be reachable?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["10am-3pm"],
+      "top_k": 5
+    },
+    {
+      "id": "fully-remote-approval",
+      "question": "Who has to approve a fully remote working arrangement?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["vp-level"],
+      "top_k": 5
+    },
+    {
+      "id": "expense-approval-threshold",
+      "question": "What is the dollar threshold above which an expense needs manager approval?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["75", "approval"],
+      "top_k": 5
+    },
+    {
+      "id": "expense-submission-window",
+      "question": "How long do I have to submit an expense report after the expense date?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["30 days"],
+      "top_k": 5
+    },
+    {
+      "id": "harassment-policy",
+      "question": "What happens if someone is found harassing a colleague?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Employee Handbook",
+      "expected_keywords": ["immediate termination"],
+      "top_k": 5
+    },
+    {
+      "id": "pricing-growth-plan",
+      "question": "How much does the Growth plan cost per month and how many team members does it include?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["99", "25"],
+      "top_k": 5
+    },
+    {
+      "id": "pricing-starter-storage",
+      "question": "How much storage does the Starter plan include?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["10gb"],
+      "top_k": 5
+    },
+    {
+      "id": "free-trial-length",
+      "question": "How long is the free trial and do I need a credit card?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["14-day", "no credit card"],
+      "top_k": 5
+    },
+    {
+      "id": "api-rate-limit-starter",
+      "question": "What is the API rate limit on the Starter plan?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["100", "requests per minute"],
+      "top_k": 5
+    },
+    {
+      "id": "api-rate-limit-exceeded",
+      "question": "What status code do I get when I exceed the API rate limit?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["429"],
+      "top_k": 5
+    },
+    {
+      "id": "security-certification",
+      "question": "What security certification does the product have?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["soc 2"],
+      "top_k": 5
+    },
+    {
+      "id": "encryption-standard",
+      "question": "How is data encrypted at rest?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["aes-256"],
+      "top_k": 5
+    },
+    {
+      "id": "data-export-formats",
+      "question": "What formats can I export my data in?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["csv", "json"],
+      "top_k": 5
+    },
+    {
+      "id": "enterprise-support-sla",
+      "question": "What response time do Enterprise customers get for support?",
+      "user_groups": ["public"],
+      "expected_document_contains": "Product Faq",
+      "expected_keywords": ["1-hour"],
+      "top_k": 5
+    },
+
+    {
+      "id": "acl-exec-bonus-blocked-for-public",
+      "question": "How are executive bonuses calculated?",
+      "user_groups": ["public"],
+      "acl_test": "must_not_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["EBITDA", "bonus"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-exec-bonus-visible-for-management",
+      "question": "How are executive bonuses calculated?",
+      "user_groups": ["management"],
+      "acl_test": "must_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["EBITDA", "bonus"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-severance-blocked-for-public",
+      "question": "What severance do executives receive if terminated without cause?",
+      "user_groups": ["public"],
+      "acl_test": "must_not_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["6 months", "severance"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-severance-visible-for-management",
+      "question": "What severance do executives receive if terminated without cause?",
+      "user_groups": ["management"],
+      "acl_test": "must_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["6 months", "severance"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-equity-blocked-for-wrong-group",
+      "question": "What equity grants do new executive hires receive?",
+      "user_groups": ["support", "engineering"],
+      "acl_test": "must_not_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["equity", "vesting"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-equity-visible-for-management",
+      "question": "What equity grants do new executive hires receive?",
+      "user_groups": ["management"],
+      "acl_test": "must_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["vesting", "cliff"],
+      "top_k": 5
+    },
+    {
+      "id": "acl-no-groups-sees-only-public",
+      "question": "How are executive bonuses calculated?",
+      "user_groups": [],
+      "acl_test": "must_not_contain",
+      "expected_document_contains": "Exec Compensation",
+      "expected_keywords": ["EBITDA"],
+      "top_k": 5
+    },
+
+    {
+      "id": "refusal-unrelated-topic",
+      "question": "What is the airspeed velocity of an unladen swallow?",
+      "user_groups": ["public"],
+      "refusal_test": true,
+      "expected_document_contains": "",
+      "expected_keywords": [],
+      "top_k": 5
+    },
+    {
+      "id": "refusal-plausible-but-absent-hr",
+      "question": "What is the company policy on sabbatical leave after ten years of service?",
+      "user_groups": ["public"],
+      "refusal_test": true,
+      "expected_document_contains": "",
+      "expected_keywords": [],
+      "top_k": 5
+    },
+    {
+      "id": "refusal-plausible-but-absent-product",
+      "question": "Does the product support single sign-on with SAML and Okta?",
+      "user_groups": ["public"],
+      "refusal_test": true,
+      "expected_document_contains": "",
+      "expected_keywords": [],
+      "top_k": 5
+    },
+    {
+      "id": "refusal-numeric-not-in-corpus",
+      "question": "How many employees does the company have in its Berlin office?",
+      "user_groups": ["public"],
+      "refusal_test": true,
+      "expected_document_contains": "",
+      "expected_keywords": [],
+      "top_k": 5
+    },
+    {
+      "id": "refusal-adjacent-vocabulary",
+      "question": "What is the pet adoption reimbursement allowance?",
+      "user_groups": ["public"],
+      "refusal_test": true,
+      "expected_document_contains": "",
+      "expected_keywords": [],
+      "top_k": 5
+    }
+  ]
+}

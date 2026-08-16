@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+keys.json
+data/db/*.sqlite3
+data/db/*.bin
