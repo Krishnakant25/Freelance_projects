@@ -1,0 +1,232 @@
+{
+  "description": "Scripted call transcripts replayed against the agent (architecture doc §6.8). Each script asserts the OUTCOME and any data that had to be captured correctly — not the exact wording, which would make the suite brittle to prompt/copy changes.",
+  "notes": {
+    "why_replay": "The doc's point is that 'iterate the prompt' with no definition of working means changes get judged on vibes and silently regress. These are the regression cases.",
+    "hours": "Scripts declare when they run ('in_hours' / 'out_of_hours') because escalation behaviour is deliberately time-dependent."
+  },
+  "scripts": [
+    {
+      "id": "book-happy-path",
+      "when": "in_hours",
+      "turns": [
+        "Hi, I'd like to book an appointment please",
+        "the first one works",
+        "my name is Sarah Chen",
+        "555 123 4567",
+        "yes that's right",
+        "no that's all, thanks"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_captured": {"customer_name": "Sarah Chen", "customer_phone": "5551234567"}
+    },
+    {
+      "id": "book-with-keypad-digit-choice",
+      "when": "in_hours",
+      "turns": [
+        "I need an appointment",
+        "2",
+        "James Okafor",
+        "5559876543",
+        "yep",
+        "nope that's it"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_captured": {"customer_name": "James Okafor", "customer_phone": "5559876543"},
+      "note": "Bare digit slot choice — this is what DTMF keypad entry produces. A regression here means the keypad fallback the agent offers doesn't actually work."
+    },
+    {
+      "id": "book-with-phone-correction",
+      "when": "in_hours",
+      "turns": [
+        "can I book in",
+        "option 1",
+        "this is Dana Lopez",
+        "555 000 1111",
+        "no that's wrong",
+        "555 222 3333",
+        "yes correct",
+        "that's everything"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_captured": {"customer_phone": "5552223333"},
+      "note": "Read-back caught a wrong number. The CORRECTED number must be what's stored — this is the whole point of read-back (doc §6.4)."
+    },
+    {
+      "id": "faq-opening-hours",
+      "when": "in_hours",
+      "turns": [
+        "what are your opening hours?",
+        "no that's all thanks"
+      ],
+      "expect_outcome": "faq_answered",
+      "expect_booking": false,
+      "expect_reply_contains": ["nine", "five"]
+    },
+    {
+      "id": "faq-parking",
+      "when": "in_hours",
+      "turns": [
+        "is there anywhere to park?",
+        "nope, bye"
+      ],
+      "expect_outcome": "faq_answered",
+      "expect_booking": false,
+      "expect_reply_contains": ["parking"]
+    },
+    {
+      "id": "faq-cost",
+      "when": "in_hours",
+      "turns": [
+        "how much is a check up?",
+        "that's all"
+      ],
+      "expect_outcome": "faq_answered",
+      "expect_booking": false,
+      "expect_reply_contains": ["eighty"]
+    },
+    {
+      "id": "human-request-in-hours-transfers",
+      "when": "in_hours",
+      "turns": ["I want to speak to a real person"],
+      "expect_outcome": "transferred",
+      "expect_booking": false,
+      "expect_transfer": true
+    },
+    {
+      "id": "human-request-after-hours-takes-callback",
+      "when": "out_of_hours",
+      "turns": [
+        "can I speak to someone",
+        "Priya Nair, 555 444 5555"
+      ],
+      "expect_outcome": "callback_requested",
+      "expect_booking": false,
+      "expect_transfer": false,
+      "note": "The 2am case. Transferring here would ring a phone nobody answers — the dead end from doc §6.6."
+    },
+    {
+      "id": "emergency-routes-immediately",
+      "when": "in_hours",
+      "turns": ["I have severe pain and swelling, it's an emergency"],
+      "expect_outcome": "transferred",
+      "expect_booking": false,
+      "expect_transfer": true,
+      "note": "Must not be routed into a booking flow — asymmetric error cost."
+    },
+    {
+      "id": "cancel-flow",
+      "when": "in_hours",
+      "setup_booking": {"name": "Marcus Webb", "phone": "5557778888"},
+      "turns": [
+        "I need to cancel my appointment",
+        "{{confirmation_code}}",
+        "yes please cancel it",
+        "no thanks, bye"
+      ],
+      "expect_outcome": "cancelled",
+      "expect_booking": false
+    },
+    {
+      "id": "cancel-lookup-by-phone",
+      "when": "in_hours",
+      "setup_booking": {"name": "Ines Duarte", "phone": "5551239876"},
+      "turns": [
+        "cancel my booking please",
+        "my number is 555 123 9876",
+        "yes",
+        "that's all"
+      ],
+      "expect_outcome": "cancelled",
+      "expect_booking": false,
+      "note": "Callers often don't have the code. Phone lookup must work or every cancellation escalates."
+    },
+    {
+      "id": "unintelligible-escapes-to-callback",
+      "when": "in_hours",
+      "turns": [
+        "zzxqq wubba mumble",
+        "grrmph zzzz",
+        "blargh",
+        "Tom Reed on 555 321 6547"
+      ],
+      "expect_outcome": "callback_requested",
+      "expect_booking": false,
+      "note": "The escape hatch. A graceful capture beats a clever agent looping (doc §6.6)."
+    },
+    {
+      "id": "faq-then-book-in-same-call",
+      "when": "in_hours",
+      "turns": [
+        "do you take insurance?",
+        "great, can I book an appointment then",
+        "first one",
+        "Alex Kim",
+        "555 808 9090",
+        "correct",
+        "no that's all"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_captured": {"customer_name": "Alex Kim"},
+      "note": "Multi-intent call — answering a question must not trap the caller in the FAQ state."
+    },
+    {
+      "id": "caller-declines-offered-times",
+      "when": "in_hours",
+      "turns": [
+        "I'd like an appointment",
+        "none of those work",
+        "the second one",
+        "Robin Patel",
+        "5554443333",
+        "yes",
+        "bye"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_no_confusion": true,
+      "expect_distinct_slot_offers": 2,
+      "note": "Declining must PAGE FORWARD to different times. An earlier version of this script asserted only outcome=booked, which stayed true via the NEXT turn while the decline was actually being misread as confusion — a broken middle hidden by a correct ending. expect_no_confusion and expect_distinct_slot_offers close that hole."
+    },
+    {
+      "id": "caller-asks-for-specific-day",
+      "when": "in_hours",
+      "turns": [
+        "can I book something on Thursday afternoon",
+        "1",
+        "Nadia Rahman",
+        "555 717 1717",
+        "yes",
+        "no thanks"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_no_confusion": true,
+      "expect_reply_contains": ["thursday"],
+      "note": "A spoken day/time preference must actually filter the offered slots. Previously datetime_hint was extracted and then discarded, so asking for Thursday afternoon got you Monday morning with no acknowledgement — which reads as the agent not listening."
+    },
+    {
+      "id": "decline-repeatedly-still-progresses",
+      "when": "in_hours",
+      "turns": [
+        "appointment please",
+        "none of those work",
+        "none of those either",
+        "doesn't work for me",
+        "1",
+        "Sam Okada",
+        "5556667777",
+        "yes",
+        "that's all"
+      ],
+      "expect_outcome": "booked",
+      "expect_booking": true,
+      "expect_no_confusion": true,
+      "expect_distinct_slot_offers": 4,
+      "note": "Three declines must show three DIFFERENT sets of times, not the same three looped."
+    }
+  ]
+}
