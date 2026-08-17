@@ -1,0 +1,214 @@
+{
+  "description": "Golden query set (architecture doc §6.8). Real business questions with independently-verified expectations, run on every change. This is what turns 'the BI tool seems right' into a measurable claim — and what catches the silent accuracy regressions that are this project's defining risk.",
+  "notes": {
+    "why_not_exact_values": "Most cases assert STRUCTURE (which metric, which grouping, which date range) plus INTERNAL CONSISTENCY (a breakdown sums to its total) rather than hardcoded currency figures. Structure is what the selector can get wrong; the arithmetic is deterministic SQL and doesn't drift. Hardcoding totals would also make the suite fail whenever the sample data is regenerated, which trains people to ignore it.",
+    "consistency_checks": "The strongest correctness signal available without a second implementation: the same number reached two different ways must agree."
+  },
+  "cases": [
+    {
+      "id": "revenue-last-month-single-number",
+      "question": "what was our revenue last month?",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": [],
+      "expect_date_range": "last calendar month",
+      "expect_chart": "stat",
+      "expect_row_count": 1,
+      "note": "Must be ONE number. 'last month' is a date filter, not a request to group by month — an early bug returned 31 daily rows here."
+    },
+    {
+      "id": "revenue-by-channel",
+      "question": "show me net revenue by channel last month",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["channel"],
+      "expect_date_range": "last calendar month",
+      "expect_chart": "bar",
+      "expect_max_rows": 4
+    },
+    {
+      "id": "revenue-trend-weekly",
+      "question": "revenue over time by week this year",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["order_date"],
+      "expect_date_range": "this year to date",
+      "expect_chart": "line",
+      "expect_time_grain": "week"
+    },
+    {
+      "id": "revenue-trend-monthly",
+      "question": "monthly revenue this year",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["order_date"],
+      "expect_chart": "line",
+      "expect_time_grain": "month"
+    },
+    {
+      "id": "order-count-last-30",
+      "question": "how many orders in the last 30 days?",
+      "expect_metrics": ["order_count"],
+      "expect_dimensions": [],
+      "expect_date_range": "the last 30 days",
+      "expect_chart": "stat"
+    },
+    {
+      "id": "aov-all-time",
+      "question": "what is our average order value all time?",
+      "expect_metrics": ["average_order_value"],
+      "expect_dimensions": [],
+      "expect_date_range": "all time",
+      "expect_chart": "stat",
+      "note": "AOV must map to its own metric, not be assembled from revenue/orders by the model."
+    },
+    {
+      "id": "aov-longest-synonym-wins",
+      "question": "average order value by region all time",
+      "expect_metrics": ["average_order_value"],
+      "expect_dimensions": ["region"],
+      "note": "'average order value' contains 'order' — the longer synonym must win, or this becomes order_count."
+    },
+    {
+      "id": "units-by-category",
+      "question": "units sold by product category last 30 days",
+      "expect_metrics": ["units_sold"],
+      "expect_dimensions": ["product_category"],
+      "expect_joins": ["order_items", "products"],
+      "expect_chart": "bar"
+    },
+    {
+      "id": "top-n-limit-respected",
+      "question": "top 3 categories by units sold",
+      "expect_metrics": ["units_sold"],
+      "expect_dimensions": ["product_category"],
+      "expect_row_count": 3
+    },
+    {
+      "id": "filter-not-groupby",
+      "question": "how much revenue came from the mobile app last month?",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": [],
+      "expect_filters": ["channel"],
+      "expect_chart": "stat",
+      "note": "A named channel is a FILTER, not a breakdown. 'from mobile app' wants one number."
+    },
+    {
+      "id": "filter-and-groupby-together",
+      "question": "revenue by region from the mobile app last month",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["region"],
+      "expect_filters": ["channel"],
+      "expect_joins": ["customers"]
+    },
+    {
+      "id": "gross-vs-net-distinct",
+      "question": "gross revenue last month",
+      "expect_metrics": ["gross_revenue"],
+      "expect_dimensions": [],
+      "note": "Explicitly asking for gross must NOT return net. The glossary defines unqualified 'revenue' as net; 'gross revenue' is a different metric."
+    },
+    {
+      "id": "refunds-metric",
+      "question": "total refunds last quarter",
+      "expect_metrics": ["refund_amount"],
+      "expect_date_range": "the last 90 days"
+    },
+    {
+      "id": "customer-count-by-segment",
+      "question": "how many customers by segment this year",
+      "expect_metrics": ["customer_count"],
+      "expect_dimensions": ["customer_segment"],
+      "expect_joins": ["customers"]
+    },
+    {
+      "id": "multi-metric",
+      "question": "revenue and orders by channel last month",
+      "expect_metrics": ["net_revenue", "order_count"],
+      "expect_dimensions": ["channel"]
+    },
+    {
+      "id": "discounts-by-channel",
+      "question": "discounts given by channel this year",
+      "expect_metrics": ["discount_amount"],
+      "expect_dimensions": ["channel"]
+    },
+    {
+      "id": "payment-method-breakdown",
+      "question": "orders by payment method last 30 days",
+      "expect_metrics": ["order_count"],
+      "expect_dimensions": ["payment_method"]
+    },
+    {
+      "id": "default-date-range-disclosed",
+      "question": "revenue by channel",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["channel"],
+      "expect_assumption_contains": "date range defaulted",
+      "note": "When the user doesn't specify a period, the default MUST be disclosed as an assumption — a silent default is how a number gets misread."
+    },
+    {
+      "id": "default-grain-disclosed",
+      "question": "revenue over time last 30 days",
+      "expect_metrics": ["net_revenue"],
+      "expect_dimensions": ["order_date"],
+      "expect_assumption_contains": "default grain"
+    },
+
+    {
+      "id": "refuse-churn",
+      "question": "what is our churn rate?",
+      "expect_refusal": true,
+      "expect_refusal_lists_metrics": true,
+      "note": "No churn metric is defined. Must refuse and say what IS available — the capability free-form NL2SQL structurally lacks."
+    },
+    {
+      "id": "refuse-profit-margin",
+      "question": "what was our profit margin last month?",
+      "expect_refusal": true,
+      "expect_refusal_lists_metrics": true,
+      "note": "Cost data isn't in the warehouse, so margin is uncomputable. Substituting revenue would be the dangerous answer."
+    },
+    {
+      "id": "refuse-ltv",
+      "question": "show me customer lifetime value by segment",
+      "expect_refusal": true,
+      "expect_refusal_lists_metrics": true
+    },
+    {
+      "id": "refuse-nonsense",
+      "question": "how many unicorns visited the warehouse?",
+      "expect_refusal": true
+    },
+    {
+      "id": "refuse-empty",
+      "question": "   ",
+      "expect_refusal": true
+    }
+  ],
+  "consistency_checks": [
+    {
+      "id": "channel-breakdown-sums-to-total",
+      "total_question": "net revenue last month",
+      "breakdown_question": "net revenue by channel last month",
+      "metric": "net_revenue",
+      "note": "The same figure reached two ways must agree. This is the strongest correctness signal available without writing a second implementation of every metric."
+    },
+    {
+      "id": "region-breakdown-sums-to-total",
+      "total_question": "net revenue this year",
+      "breakdown_question": "net revenue by region this year",
+      "metric": "net_revenue",
+      "note": "Also proves the customers join doesn't fan out and double-count — a join that multiplies rows is the classic silent BI error."
+    },
+    {
+      "id": "payment-breakdown-sums-to-total",
+      "total_question": "orders last 30 days",
+      "breakdown_question": "orders by payment method last 30 days",
+      "metric": "order_count"
+    },
+    {
+      "id": "daily-sums-to-period-total",
+      "total_question": "net revenue last month",
+      "breakdown_question": "net revenue by day last month",
+      "metric": "net_revenue",
+      "note": "Time-grain grouping must partition the period exactly — no gaps, no overlaps, no rows outside the range."
+    }
+  ]
+}

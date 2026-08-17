@@ -1,0 +1,197 @@
+# SEMANTIC MODEL — the actual deliverable of this project.
+#
+# This file is what makes "ask your data a question" trustworthy. Read the
+# architecture doc §6.1 for why: free-form NL→SQL tops out around 70-something
+# percent execution accuracy on realistic schemas, and its errors are SILENT —
+# a confident wrong number with a chart, no error anywhere, straight into a
+# board deck.
+#
+# So the LLM never writes SQL. It picks from the metrics and dimensions defined
+# below, and SQL is generated deterministically from that selection. That turns
+# an open-ended code-generation problem into constrained selection over a known
+# vocabulary, which is both far more accurate and — crucially — able to REFUSE:
+# "there's no metric for churn; here's what I do have."
+#
+# Every metric has exactly ONE definition, reviewed by a human. When finance and
+# marketing disagree about what "revenue" means, that argument happens here,
+# once, in a diff — not silently inside a generated query.
+
+version: 1
+
+glossary:
+  # Ambiguous business terms resolved ONCE, explicitly. "Revenue" without
+  # qualification is the single most common source of BI disagreement.
+  revenue: >
+    Unqualified "revenue" means NET revenue (gross sales minus refunds and
+    discounts). Ask for "gross revenue" explicitly if that's what you want.
+  last_month: >
+    "Last month" means the previous CALENDAR month, not trailing 30 days.
+    Say "last 30 days" for the rolling window.
+  active_customer: >
+    A customer with at least one non-refunded order in the period.
+  order: >
+    A completed checkout. Cancelled carts are not orders and never appear
+    in these tables.
+
+# Time grains the SQL builder can group by. Kept explicit so no one can request
+# a grain the builder doesn't actually implement.
+time_grains:
+  day:   "date(o.ordered_at)"
+  week:  "date(o.ordered_at, 'weekday 0', '-6 days')"
+  month: "strftime('%Y-%m-01', o.ordered_at)"
+  year:  "strftime('%Y-01-01', o.ordered_at)"
+
+# Named relative date ranges. Defined here rather than parsed from language, so
+# "last month" cannot mean two different things on two different days.
+date_ranges:
+  today:
+    label: "today"
+    start: "date('now')"
+    end: "date('now', '+1 day')"
+  yesterday:
+    label: "yesterday"
+    start: "date('now', '-1 day')"
+    end: "date('now')"
+  last_7_days:
+    label: "the last 7 days"
+    start: "date('now', '-7 days')"
+    end: "date('now', '+1 day')"
+  last_30_days:
+    label: "the last 30 days"
+    start: "date('now', '-30 days')"
+    end: "date('now', '+1 day')"
+  last_month:
+    label: "last calendar month"
+    start: "date('now', 'start of month', '-1 month')"
+    end: "date('now', 'start of month')"
+  this_month:
+    label: "this calendar month so far"
+    start: "date('now', 'start of month')"
+    end: "date('now', '+1 day')"
+  last_quarter:
+    label: "the last 90 days"
+    start: "date('now', '-90 days')"
+    end: "date('now', '+1 day')"
+  this_year:
+    label: "this year to date"
+    start: "date('now', 'start of year')"
+    end: "date('now', '+1 day')"
+  all_time:
+    label: "all time"
+    start: "date('1970-01-01')"
+    end: "date('now', '+1 day')"
+
+# Base table and the joins available. The builder only ever emits joins listed
+# here, so it cannot invent a relationship — the classic free-form NL→SQL
+# failure where a model joins on a plausible-looking but wrong key.
+base_table: "orders o"
+
+joins:
+  order_items:
+    sql: "LEFT JOIN order_items oi ON oi.order_id = o.id"
+    provides: [oi]
+  customers:
+    sql: "LEFT JOIN customers c ON c.id = o.customer_id"
+    provides: [c]
+  products:
+    sql: "LEFT JOIN products p ON p.id = oi.product_id"
+    requires: [order_items]      # products only reachable through order_items
+    provides: [p]
+
+metrics:
+  net_revenue:
+    label: "Net revenue"
+    description: "Gross sales minus refunds and discounts. The default meaning of 'revenue'."
+    sql: "ROUND(SUM(o.gross_amount - o.discount_amount - o.refund_amount), 2)"
+    format: currency
+    synonyms: [revenue, sales, turnover, income, "net sales", "top line"]
+
+  gross_revenue:
+    label: "Gross revenue"
+    description: "Total sales before refunds and discounts."
+    sql: "ROUND(SUM(o.gross_amount), 2)"
+    format: currency
+    synonyms: ["gross sales", "gross"]
+
+  refund_amount:
+    label: "Refunds"
+    description: "Total value refunded."
+    sql: "ROUND(SUM(o.refund_amount), 2)"
+    format: currency
+    synonyms: [refunds, returns, "refunded amount", chargebacks]
+
+  order_count:
+    label: "Orders"
+    description: "Number of completed orders."
+    sql: "COUNT(DISTINCT o.id)"
+    format: integer
+    synonyms: [orders, "order volume", "number of orders", transactions, purchases]
+
+  average_order_value:
+    label: "Average order value"
+    description: "Net revenue divided by order count."
+    sql: "ROUND(SUM(o.gross_amount - o.discount_amount - o.refund_amount) / NULLIF(COUNT(DISTINCT o.id), 0), 2)"
+    format: currency
+    synonyms: [aov, "average order", "avg order value", "basket size"]
+
+  units_sold:
+    label: "Units sold"
+    description: "Total item quantity across orders."
+    sql: "SUM(oi.quantity)"
+    format: integer
+    requires_joins: [order_items]
+    synonyms: [units, quantity, "items sold", volume]
+
+  customer_count:
+    label: "Customers"
+    description: "Distinct customers who ordered in the period."
+    sql: "COUNT(DISTINCT o.customer_id)"
+    format: integer
+    synonyms: [customers, "unique customers", "distinct customers", buyers]
+
+  discount_amount:
+    label: "Discounts given"
+    description: "Total discount value applied."
+    sql: "ROUND(SUM(o.discount_amount), 2)"
+    format: currency
+    synonyms: [discounts, promotions, "promo spend"]
+
+dimensions:
+  order_date:
+    label: "Date"
+    description: "Order date, grouped by the requested time grain."
+    time_dimension: true
+    synonyms: [date, time, day, week, month, "over time", trend]
+
+  channel:
+    label: "Channel"
+    sql: "o.channel"
+    description: "Where the order came from: web, mobile_app, marketplace, phone."
+    synonyms: [channels, source, "sales channel", platform]
+
+  region:
+    label: "Region"
+    sql: "c.region"
+    requires_joins: [customers]
+    description: "Customer region."
+    synonyms: [regions, country, territory, geography, location, market]
+
+  customer_segment:
+    label: "Customer segment"
+    sql: "c.segment"
+    requires_joins: [customers]
+    description: "consumer, business, or enterprise."
+    synonyms: [segment, segments, "customer type", tier]
+
+  product_category:
+    label: "Product category"
+    sql: "p.category"
+    requires_joins: [order_items, products]
+    description: "Product category."
+    synonyms: [category, categories, "product type", "product line", department]
+
+  payment_method:
+    label: "Payment method"
+    sql: "o.payment_method"
+    description: "card, paypal, bank_transfer, or gift_card."
+    synonyms: ["payment", "pay method", "how they paid"]
