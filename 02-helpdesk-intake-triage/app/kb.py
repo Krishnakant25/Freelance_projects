@@ -29,7 +29,14 @@ class KBMatch:
 def ingest_kb_article(title: str, body: str, category: str = "") -> int:
     vec = embed_query(f"{title}\n{body}")
     with db.session() as conn:
-        return db.insert_kb_article(conn, title=title, body=body, category=category, embedding=vec)
+        article_id = db.insert_kb_article(conn, title=title, body=body, category=category, embedding=vec)
+    # MUST invalidate — the search path serves from an in-process cache built
+    # on first query. Without this, a newly-added article is invisible to
+    # deflection search until the process restarts, which is a silent
+    # wrong-behaviour bug: the KB "contains" the article, the admin sees it in
+    # the DB, and users still get told there's no self-service answer.
+    invalidate_cache()
+    return article_id
 
 
 def ingest_kb_directory(directory) -> list[int]:
@@ -66,46 +73,57 @@ def invalidate_cache() -> None:
         _cached_meta = None
 
 
-def _ensure_loaded():
+def _load_snapshot() -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Returns a consistent (ids, matrix, meta) snapshot, building the cache
+    if needed.
+
+    Returning a snapshot rather than having callers read the module globals
+    directly is deliberate: an earlier version read `_cached_matrix` etc.
+    after releasing the lock, so a concurrent invalidate_cache() between the
+    load and the read could set them to None and crash the request mid-query
+    with a TypeError. A snapshot can't be torn out from under the caller.
+    """
     global _cached_ids, _cached_matrix, _cached_meta
     with _cache_lock:
-        if _cached_matrix is not None:
-            return
-        with db.session() as conn:
-            rows = db.all_kb_articles(conn)
-        if not rows:
-            _cached_ids = np.array([], dtype=np.int64)
-            _cached_matrix = np.zeros((0, 0), dtype=np.float32)
-            _cached_meta = []
-            return
-        ids, vecs, meta = [], [], []
-        for r in rows:
-            if r["embedding"] is None:
-                continue
-            ids.append(r["id"])
-            vecs.append(db.unpack_embedding(r["embedding"], r["embedding_dim"]))
-            meta.append({"title": r["title"], "body": r["body"]})
-        _cached_ids = np.array(ids, dtype=np.int64)
-        _cached_matrix = np.array(vecs, dtype=np.float32) if vecs else np.zeros((0, 0), dtype=np.float32)
-        _cached_meta = meta
+        if _cached_matrix is None:
+            with db.session() as conn:
+                rows = db.all_kb_articles(conn)
+            ids, vecs, meta = [], [], []
+            for r in rows:
+                if r["embedding"] is None:
+                    continue
+                ids.append(r["id"])
+                vecs.append(db.unpack_embedding(r["embedding"], r["embedding_dim"]))
+                meta.append({"title": r["title"], "body": r["body"]})
+            _cached_ids = np.array(ids, dtype=np.int64)
+            _cached_matrix = np.array(vecs, dtype=np.float32) if vecs else np.zeros((0, 0), dtype=np.float32)
+            _cached_meta = meta
+        return _cached_ids, _cached_matrix, _cached_meta
 
 
 def search(query: str, top_k: int = 3) -> list[KBMatch]:
-    _ensure_loaded()
-    if _cached_matrix is None or _cached_matrix.size == 0:
+    ids, matrix, meta = _load_snapshot()
+    if matrix.size == 0:
         return []
     query_vec = embed_query(query)
-    scores = _cached_matrix @ query_vec
+    scores = matrix @ query_vec
     order = np.argsort(-scores)[:top_k]
     return [
         KBMatch(
-            article_id=int(_cached_ids[i]),
-            title=_cached_meta[i]["title"],
-            body=_cached_meta[i]["body"],
+            article_id=int(ids[i]),
+            title=meta[i]["title"],
+            body=meta[i]["body"],
             score=float(scores[i]),
         )
         for i in order
     ]
+
+
+def article_count() -> int:
+    """Number of searchable articles currently in the cache — used by the
+    /ready probe so a deployment can tell an empty KB from a loaded one."""
+    _, matrix, _ = _load_snapshot()
+    return int(matrix.shape[0]) if matrix.size else 0
 
 
 def best_match(query: str) -> Optional[KBMatch]:

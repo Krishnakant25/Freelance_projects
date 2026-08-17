@@ -1,6 +1,15 @@
 # Manual Steps
 
-**For a demo video or local testing: nothing required.** Everything below works out of the box with `LLM_PROVIDER=none` (rule-based extraction, no key, no cost).
+**For a demo video or local CLI testing: nothing required.** The CLI has direct database access and needs no keys; `LLM_PROVIDER=none` (rule-based extraction) is the default.
+
+**To run the HTTP API**, you need one API key — the staff endpoints reject every request until one exists:
+
+```bash
+python scripts/manage_keys.py create --name "helpdesk-team" --roles staff
+python scripts/manage_keys.py create --name "ops-lead" --roles admin
+```
+
+The raw key prints once; store it. Use it as an `X-API-Key` header. Intake endpoints (`/report`) stay anonymous by design — only ticket data and admin actions are gated.
 
 ---
 
@@ -81,4 +90,24 @@ Not required for a demo, but worth knowing before a pilot:
 
 - **Feed it real historical tickets.** Run 50–100 of a client's actual past tickets through `python -m app.cli report "<text>"` and compare the computed priority to what a human actually assigned. Disagreements tell you whether the priority matrix or the red-flag list needs adjusting for their specific environment — do this before trusting the numbers on anything but the demo KB.
 - **Extend the red-flag list with their terminology.** Internal system names, specific compliance triggers, anything their security team already treats as "page immediately" — `app/redflag.py: add_pattern()` is the extension point.
-- **No auth is implemented.** If this goes anywhere reachable by more than you, that's the first gap to close — see README's Known Limitations.
+- **Issue one key per consumer**, with the narrowest role that works. `staff` for anyone reading the queue; `admin` only for whoever should be able to trigger pages.
+- **Run with `--workers 1`.** The scheduler, rate limiter, and KB cache are per-process. If you must run multiple workers, set `SCHEDULER_ENABLED=false` and point cron at `POST /admin/check-escalations` instead, or you'll get one escalation sweep per worker. See PRODUCTION_NOTES.md §4.1.
+- **Watch `/ready` after deploying.** It reports pending/failed alerts, whether the scheduler is running, and whether the model is warm. A `failed` alert count above zero means a page was owed and never delivered — worth an actual monitor.
+
+### Deployment checklist
+
+```bash
+# 1. Keys exist
+python scripts/manage_keys.py list
+
+# 2. All suites pass
+python run_all_tests.py
+
+# 3. Serve (single worker — see above)
+uvicorn app.api:app --host 127.0.0.1 --port 8000 --workers 1
+
+# 4. Confirm healthy: warnings should be empty, scheduler.running true
+curl -s localhost:8000/ready | python -m json.tool
+```
+
+Put a reverse proxy in front for TLS. Bind uvicorn to `127.0.0.1`, never `0.0.0.0`.

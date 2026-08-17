@@ -8,8 +8,8 @@ Run:  python eval/test_rules_engine.py
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _harness  # noqa: E402
 
 from app.rules_engine import Impact, Priority, Urgency, resolve_priority  # noqa: E402
 

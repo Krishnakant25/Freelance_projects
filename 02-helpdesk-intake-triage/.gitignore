@@ -2,4 +2,8 @@
 __pycache__/
 *.pyc
 .env
+# API key hashes — never commit. Regenerate with scripts/manage_keys.py.
+keys.json
 data/db/*.sqlite3
+data/db/*.sqlite3-wal
+data/db/*.sqlite3-shm

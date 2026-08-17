@@ -183,60 +183,133 @@ if (!SpeechRecognitionImpl) {
 
 // --- Submit flow ----------------------------------------------------------
 
+// XSS NOTE — why this file builds DOM nodes instead of using innerHTML:
+// An earlier version interpolated server values straight into innerHTML.
+// That was exploitable: `data.reasoning` embeds the red-flag `matched_phrase`,
+// which is a regex match against USER-SUPPLIED text, and several red-flag
+// patterns contain wildcards (e.g. \bvirus\b.{0,15}\b(detected)\b). A crafted
+// description could therefore get a short span of attacker-controlled markup
+// reflected into the page. KB article bodies were also injected as raw HTML.
+// Building nodes and assigning .textContent makes injection structurally
+// impossible rather than relying on the API to sanitise on the way out.
+
+function clearResult() {
+  els.result.replaceChildren();
+}
+
+function el(tag, { text = '', className = '', style = '', id = '' } = {}) {
+  const node = document.createElement(tag);
+  if (text) node.textContent = text;           // never innerHTML
+  if (className) node.className = className;
+  if (style) node.setAttribute('style', style);
+  if (id) node.id = id;
+  return node;
+}
+
+// Priority values come from a fixed server-side enum, but this page must not
+// assume that — an unexpected value would otherwise land in a class name.
+const ALLOWED_PRIORITIES = new Set(['P1', 'P2', 'P3', 'P4']);
+
 function renderTicketResult(data) {
-  const flagBanner = data.red_flag
-    ? `<div style="color:var(--danger);font-weight:700;margin-bottom:8px;">⚠ SECURITY/OUTAGE OVERRIDE APPLIED</div>`
-    : '';
+  clearResult();
   els.result.className = `result show ${data.red_flag ? 'redflag' : 'ticket'}`;
-  els.result.innerHTML = `
-    ${flagBanner}
-    <h3>Ticket #${data.ticket_id} created <span class="badge ${data.priority}">${data.priority}</span></h3>
-    <div class="reasoning">${data.reasoning}</div>
-  `;
+
+  if (data.red_flag) {
+    els.result.appendChild(el('div', {
+      text: '⚠ SECURITY/OUTAGE OVERRIDE APPLIED',
+      style: 'color:var(--danger);font-weight:700;margin-bottom:8px;',
+    }));
+  }
+
+  const heading = el('h3', { text: `Ticket #${data.ticket_id} created ` });
+  const priority = String(data.priority || '');
+  const badge = el('span', { text: priority });
+  badge.className = ALLOWED_PRIORITIES.has(priority) ? `badge ${priority}` : 'badge';
+  heading.appendChild(badge);
+  els.result.appendChild(heading);
+
+  els.result.appendChild(el('div', { text: data.reasoning || '', className: 'reasoning' }));
+
   const spoken = data.red_flag
     ? `This has been flagged as a security or outage issue and filed as priority 1. Ticket number ${data.ticket_id}. Someone will be notified immediately.`
-    : `Ticket ${data.ticket_id} created with priority ${data.priority}.`;
+    : `Ticket ${data.ticket_id} created with priority ${priority}.`;
   speak(spoken);
 }
 
 function renderDeflection(data, queryText) {
   lastDeflection = { article_id: data.kb_article.id, query_text: queryText };
+  clearResult();
   els.result.className = 'result show deflected';
-  els.result.innerHTML = `
-    <h3>We found something that might help</h3>
-    <p><strong>${data.kb_article.title}</strong></p>
-    <p>${data.kb_article.body}</p>
-    <div class="result-controls">
-      <button class="btn-secondary" id="resolvedBtn">This fixed it, thanks</button>
-      <button id="stillNeedHelpBtn">Still need help — file a ticket</button>
-    </div>
-  `;
+
+  els.result.appendChild(el('h3', { text: 'We found something that might help' }));
+
+  const titleP = el('p');
+  titleP.appendChild(el('strong', { text: data.kb_article.title || '' }));
+  els.result.appendChild(titleP);
+
+  els.result.appendChild(el('p', { text: data.kb_article.body || '' }));
+
+  const controls = el('div', { className: 'result-controls' });
+  const resolvedBtn = el('button', { text: 'This fixed it, thanks', className: 'btn-secondary' });
+  const stillNeedHelpBtn = el('button', { text: 'Still need help — file a ticket' });
+  controls.append(resolvedBtn, stillNeedHelpBtn);
+  els.result.appendChild(controls);
+
   speak(`I found a suggestion that might help. ${data.kb_article.title}. ${data.kb_article.body}`);
 
-  document.getElementById('resolvedBtn').addEventListener('click', async () => {
-    await fetch(`${API_BASE}/deflection/feedback`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query_text: lastDeflection.query_text, kb_article_id: lastDeflection.article_id, resolved: true }),
-    });
-    els.result.innerHTML += '<p style="color:var(--ok);margin-top:10px;">Glad that helped!</p>';
+  resolvedBtn.addEventListener('click', async () => {
+    resolvedBtn.disabled = true;
+    try {
+      await fetch(`${API_BASE}/deflection/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query_text: lastDeflection.query_text,
+          kb_article_id: lastDeflection.article_id,
+          resolved: true,
+        }),
+      });
+      els.result.appendChild(el('p', {
+        text: 'Glad that helped!',
+        style: 'color:var(--ok);margin-top:10px;',
+      }));
+    } catch (err) {
+      setStatus(`Couldn't record that: ${err.message}`);
+      resolvedBtn.disabled = false;
+    }
   });
 
-  document.getElementById('stillNeedHelpBtn').addEventListener('click', async () => {
+  stillNeedHelpBtn.addEventListener('click', async () => {
+    stillNeedHelpBtn.disabled = true;
     setStatus('Filing a ticket...');
-    const resp = await fetch(`${API_BASE}/report/file-anyway`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description: queryText, requester: els.requester.value }),
-    });
-    const data = await resp.json();
-    setStatus('');
-    renderTicketResult(data);
+    try {
+      const resp = await fetch(`${API_BASE}/report/file-anyway`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: queryText, requester: els.requester.value }),
+      });
+      if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+      const ticketData = await resp.json();
+      setStatus('');
+      renderTicketResult(ticketData);
+    } catch (err) {
+      setStatus(`Couldn't file the ticket: ${err.message}`);
+      stillNeedHelpBtn.disabled = false;
+    }
   });
 }
+
+// Must match MAX_DESCRIPTION_CHARS in app/config.py. Enforced client-side too
+// so an over-long entry gets an immediate, clear message instead of a 422 from
+// the server — the server cap is still the real one, this is just UX.
+const MAX_DESCRIPTION_CHARS = 4000;
 
 async function submitReport() {
   const description = els.description.value.trim();
   if (!description) {
     setStatus('Please describe the issue first, by voice or typing.');
+    return;
+  }
+  if (description.length > MAX_DESCRIPTION_CHARS) {
+    setStatus(`That's ${description.length} characters — please shorten it to under ${MAX_DESCRIPTION_CHARS}.`);
     return;
   }
   els.submitBtn.disabled = true;
@@ -248,7 +321,18 @@ async function submitReport() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description, requester: els.requester.value }),
     });
+
+    if (resp.status === 429) {
+      const retryAfter = resp.headers.get('Retry-After') || 'a few';
+      setStatus(`Too many requests — please wait ${retryAfter} seconds and try again.`);
+      return;
+    }
+    if (resp.status === 422) {
+      setStatus('That input was rejected as invalid — check the length and try again.');
+      return;
+    }
     if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+
     const data = await resp.json();
     setStatus('');
     if (data.outcome === 'deflected') {
@@ -269,7 +353,7 @@ els.resetBtn.addEventListener('click', () => {
   els.description.value = '';
   els.requester.value = '';
   els.result.className = 'result';
-  els.result.innerHTML = '';
+  clearResult();
   setStatus('');
   if (isListening) recognizer.stop();
   window.speechSynthesis?.cancel();

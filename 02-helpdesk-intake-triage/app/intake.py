@@ -38,27 +38,52 @@ class IntakeResult:
 
 
 def _create_ticket(text: str, requester: str) -> IntakeResult:
+    """
+    ORDERING IS DELIBERATE — network I/O never happens inside a DB
+    transaction. An earlier version ran extract_incident() (an LLM call, up
+    to a 30s timeout) and send_p1_alert() (a Slack call, 10s timeout) inside
+    `with db.session()`. Because SQLite allows a single writer, that held the
+    write path open across two separate network round-trips: every concurrent
+    ticket submission queued behind whichever request was waiting on an
+    external API, and a slow LLM provider would stall the entire helpdesk
+    rather than just the one request that used it.
+
+    The sequence below keeps each DB transaction to pure local writes:
+      1. red-flag scan   (local, instant)
+      2. extraction      (NETWORK — outside any transaction)
+      3. classify        (local, pure function)
+      4. write ticket + audit  (transaction 1, local only)
+      5. alert           (NETWORK — outside any transaction)
+      6. write alert log (transaction 2, local only)
+    """
+    # 1. Red-flag scan — local regex, no I/O.
     red_flag = redflag_scan(text)
 
-    with db.session() as conn:
-        if red_flag.matched:
-            # Red flag overrides the rules engine entirely — extraction still
-            # runs (for category/description on the ticket record), but its
-            # impact/urgency output is not consulted for priority.
-            extracted = extract_incident(text)
-            priority = "P1"
-            reasoning = (
-                f"RED-FLAG OVERRIDE: matched {red_flag.category!r} phrase "
-                f"{red_flag.matched_phrase!r} — forced P1 regardless of extracted impact/urgency."
-            )
-        else:
-            extracted = extract_incident(text)
-            result = resolve_priority(extracted.impact, extracted.urgency)
-            priority = result.priority.value
-            reasoning = result.reasoning
-            if result.used_safe_default:
-                reasoning += " [safe default applied due to unspecified field]"
+    # 2. Extraction — may be a network call. Deliberately before any session.
+    extracted = extract_incident(text)
 
+    # 3. Classification — pure function, no I/O.
+    if red_flag.matched:
+        # Red flag overrides the rules engine entirely. Extraction still ran
+        # (for category/description on the record), but its impact/urgency
+        # output is not consulted for priority.
+        priority = "P1"
+        reasoning = (
+            f"RED-FLAG OVERRIDE: matched {red_flag.category!r} phrase "
+            f"{red_flag.matched_phrase!r} — forced P1 regardless of extracted impact/urgency."
+        )
+    else:
+        result = resolve_priority(extracted.impact, extracted.urgency)
+        priority = result.priority.value
+        reasoning = result.reasoning
+        if result.used_safe_default:
+            reasoning += " [safe default applied due to unspecified field]"
+
+    # 4. Transaction 1 — local writes only, held for microseconds. The P1
+    #    alert INTENT is enqueued here, in the same transaction as the ticket,
+    #    so a crash before delivery leaves a recoverable pending row rather
+    #    than a ticket nobody was ever paged about.
+    with db.session() as conn:
         ticket_id = db.insert_ticket(
             conn,
             requester=requester,
@@ -74,7 +99,6 @@ def _create_ticket(text: str, requester: str) -> IntakeResult:
             red_flag_phrase=red_flag.matched_phrase,
             extraction_provider=extracted.provider,
         )
-
         db.log_event(
             conn,
             event_type="ticket_classified",
@@ -89,16 +113,40 @@ def _create_ticket(text: str, requester: str) -> IntakeResult:
             },
         )
 
-        alert_info = None
+        outbox_id = None
         if priority == "P1":
-            alert_result = alerting.send_p1_alert(ticket_id, extracted.description or text, reasoning)
-            db.log_event(
+            outbox_id = db.enqueue_alert(
                 conn,
-                event_type="p1_alert",
-                ticket_id=ticket_id,
-                details={"channel": alert_result.channel, "sent": alert_result.sent, "error": alert_result.error},
+                ticket_id,
+                "new_p1",
+                alerting.build_message(ticket_id, extracted.description or text, reasoning),
             )
-            alert_info = {"channel": alert_result.channel, "sent": alert_result.sent}
+
+    # The ticket AND its alert intent are now durably stored. Delivery below is
+    # a best-effort fast path for low latency; if it fails or the process dies
+    # here, the pending outbox row is picked up by flush_outbox() on the next
+    # scheduler tick. An alerting failure can no longer lose the page.
+    alert_info = None
+    if priority == "P1" and outbox_id is not None:
+        try:
+            with db.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM alert_outbox WHERE id = ?", (outbox_id,)
+                ).fetchone()
+                row = dict(row) if row else None
+            if row:
+                # 5. Network call — outside any transaction.
+                result = alerting.deliver_outbox_entry(row)
+                alert_info = {
+                    "channel": result.channel,
+                    "sent": result.sent,
+                    "attempts": result.attempts,
+                }
+        except Exception:  # noqa: BLE001 - never let delivery break ticket creation
+            logger.exception(
+                "Immediate alert delivery failed for ticket %s; left pending in outbox", ticket_id
+            )
+            alert_info = {"channel": "outbox", "sent": False, "queued": True}
 
     return IntakeResult(
         outcome="ticket_created",

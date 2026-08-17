@@ -10,11 +10,18 @@ This project is self-contained. It shares no code with `05-hybrid-rag-search-eng
 
 | | |
 |---|---|
-| Test suite | **114 assertions across 5 suites, all passing** (`python run_all_tests.py`) |
+| Test suite | **~208 assertions across 7 suites, all passing** (`python run_all_tests.py`) |
 | Priority rules engine | Exhaustively tested — every matrix cell, monotonicity, unknown-value escalation |
 | Red-flag scanner | 28 cases — known-dangerous phrases caught, routine tickets not false-positived |
-| Ready for | Internal demo, single-instance pilot with a client's real historical tickets |
-| **Not** ready for | Public-facing deployment (no API auth — see Known Limitations), high ticket volume without a real ticketing system behind it |
+| Auth | API-key, two roles. Staff/admin endpoints verified rejecting anonymous (401) and wrong-role (403) |
+| Alerting | Crash-safe durable outbox; per-ticket cooldown prevents alert spam |
+| Escalation | In-process scheduler — verified escalating an unacknowledged P1 autonomously |
+| Concurrency | 80 concurrent writes across 8 threads, zero lock errors (WAL + busy_timeout) |
+| Cold start | 29ms first request (was ~30s before startup warmup) |
+| Ready for | Single-instance deployment (`--workers 1`) on an internal network |
+| **Not** ready for | Multi-worker / horizontally-scaled deployment — see the deferred bottleneck below |
+
+A production-readiness audit was run after the initial build, then a second pass to close what it found. Between them: **eleven real defects, all in code that was already passing its full test suite** — a test harness that deleted the production database, network calls held inside DB transactions, a reflected XSS, escalation that never actually ran, and alert logic that would have paged Slack every minute forever once it did. All fixed with regression tests. See **[`PRODUCTION_NOTES.md`](PRODUCTION_NOTES.md)** for the full findings, measurements, and the one bottleneck deliberately deferred.
 
 ---
 
@@ -59,10 +66,19 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 copy .env.example .env
-python run_all_tests.py         # all 5 suites must pass
+python run_all_tests.py         # all 7 suites must pass
 ```
 
-No API key needed to run anything — `LLM_PROVIDER=none` is the default and is what the test suite and demo script both use.
+No LLM key needed — `LLM_PROVIDER=none` is the default and is what the test suite and demo script both use.
+
+**For the API only**, create a key for the staff endpoints (the CLI doesn't need one — it has direct local DB access):
+
+```bash
+python scripts/manage_keys.py create --name "helpdesk-team" --roles staff
+python scripts/manage_keys.py create --name "ops-lead" --roles admin
+```
+
+Intake endpoints stay anonymous by design; only `/tickets`, acknowledge/resolve, and `/admin/*` require a key.
 
 ---
 
@@ -103,18 +119,28 @@ uvicorn app.api:app --reload
 
 ## Known limitations
 
-- **No API authentication.** Unlike the RAG project (which has API-key auth as a hard requirement), this build's API has none. That's fine for local testing; it is a real gap for any deployment where "who is submitting this ticket" matters, or where the queue/acknowledge/resolve endpoints shouldn't be open to anyone who can reach the port. Add auth before deploying past a local demo.
-- **Rule-based extraction is genuinely weak on ambiguous text.** It's legible and free, but it's keyword matching, not understanding — a cleverly-phrased ticket can slip past every category/impact/urgency keyword and land on `unknown` (which the rules engine then safely escalates, so the failure mode is "over-cautious," not "silently wrong" — but it's still a real accuracy ceiling).
-- **The red-flag list and KB deflection threshold are calibrated on a tiny demo set** (13 eval cases, 5 KB articles). Recalibrate against a client's real historical tickets before trusting the numbers — see MANUAL_STEPS.md.
+### Deferred bottleneck: single-process only
+
+**Run with `--workers 1`.** The rate limiter, KB cache, and scheduler are per-process, and SQLite allows one writer. This is a deliberate deferral, not an oversight — measured headroom within one worker is genuinely adequate for the target deployment (80 concurrent writes, zero errors, 29ms latency).
+
+Crossing it means Postgres + Redis + running the scheduler in one place: a real migration, correctly deferred until there's evidence of need. [`PRODUCTION_NOTES.md` §4.1](PRODUCTION_NOTES.md) lists the explicit trigger conditions and interim mitigations (proxy-level rate limiting, external cron for escalation).
+
+### Genuine accuracy ceilings
+
+- **Rule-based extraction is weak on ambiguous text.** Legible and free, but keyword matching, not understanding. A cleverly-phrased ticket can miss every keyword and land on `unknown` — which the rules engine then *escalates*, so the failure mode is over-cautious rather than silently wrong. Still a real ceiling; switch to Groq/Gemini for better handling (MANUAL_STEPS.md).
+- **Red-flag list and deflection threshold are calibrated on 13 cases and 5 KB articles.** Can't be meaningfully tuned without a client's real historical tickets. An input we don't have, not a defect.
+
+### Scope
+
 - **No integration with a real ticketing system.** This stands alone; a real deployment sits in front of Zendesk/Jira/Freshservice as a smarter intake layer, not a replacement.
-- **Single-instance only** (SQLite, in-process nothing to distribute) — fine for a pilot, not for multi-worker scale. Same tradeoffs as the RAG project's DEPLOYMENT.md, not re-documented here since the pattern is identical.
+- **CORS is wildcard** (`allow_credentials=False`). Coherent while intake is anonymous and staff auth uses an explicit header rather than cookies, so there's no CSRF surface. Tighten to known origins once the intake page has a fixed deployment domain.
 
 ## Production upgrade path
 
 | This build | Production swap | When |
 |---|---|---|
 | Rule-based extraction | Groq/Gemini free tier → GPT-4o-mini/Claude Haiku | Ambiguous free text needs real understanding |
-| No API auth | API-key auth (same pattern as the RAG project's `app/auth.py`) | Before any non-local deployment |
-| SQLite | Postgres | Concurrent writers / real production load |
+| SQLite + in-process state | Postgres + Redis | **The deferred bottleneck** — see PRODUCTION_NOTES.md §4.1 for trigger conditions |
 | Standalone ticket store | Zendesk/Jira/Freshservice API integration | Client already has a ticketing system (usual case) |
-| Slack webhook | PagerDuty/Opsgenie | Guaranteed delivery + on-call rotation for P1 |
+| Slack webhook | PagerDuty/Opsgenie | On-call rotation for P1 (the durable outbox already handles delivery reliability) |
+| `keys.json` | Secrets manager (Vault, AWS Secrets Manager) | Key rotation requirements, or more than a handful of keys |

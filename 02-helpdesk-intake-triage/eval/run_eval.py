@@ -9,20 +9,14 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+# MUST be first — redirects the DB to a temp file. Before this existed, the
+# setup() below deleted the operator's real database on every test run.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _harness  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+ROOT = _harness.ROOT
 
-from app import config, db, kb  # noqa: E402
-
-config.LLM_PROVIDER = "none"
-config.SLACK_WEBHOOK_URL = ""
-
+from app import kb  # noqa: E402
 from app.intake import start_intake  # noqa: E402
 
 EVAL_SET_PATH = Path(__file__).resolve().parent / "eval_set.json"
@@ -30,11 +24,8 @@ KB_DIR = ROOT / "data" / "kb_articles"
 
 
 def setup():
-    if config.DB_PATH.exists():
-        config.DB_PATH.unlink()
-    db.init_db()
+    _harness.reset_db()
     kb.ingest_kb_directory(KB_DIR)
-    kb.invalidate_cache()
 
 
 def run_case(case: dict) -> dict:

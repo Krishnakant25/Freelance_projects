@@ -16,6 +16,8 @@ SUITES = [
     ("Red-flag keyword scanner", ["eval/test_redflag.py"]),
     ("Structured extraction", ["eval/test_extraction.py"]),
     ("Alerting + escalation", ["eval/test_alerting.py"]),
+    ("Production hardening regressions", ["eval/test_production_hardening.py"]),
+    ("API validation / rate limiting / probes", ["eval/test_api.py"]),
     ("End-to-end intake pipeline", ["eval/run_eval.py"]),
 ]
 

@@ -7,8 +7,8 @@ Run:  python eval/test_redflag.py
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _harness  # noqa: E402
 
 from app.redflag import add_pattern, scan  # noqa: E402
 
