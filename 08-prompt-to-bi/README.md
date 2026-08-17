@@ -31,7 +31,7 @@ The model's job becomes **constrained selection over a known vocabulary**, not o
 
 | | |
 |---|---|
-| Test suite | **64 assertions + 24 golden queries + 4 consistency checks, all passing** |
+| Test suite | **93 assertions + 24 golden queries + 4 consistency checks, all passing** |
 | Read-only enforcement | Verified at the driver level — INSERT/UPDATE/DELETE/DROP/ATTACH all refused |
 | SQL injection | Filter values are bound parameters; an injection payload is provably inert |
 | Refusal | 5 golden cases assert a clean refusal that lists available metrics |
@@ -49,7 +49,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 python -m app.cli seed          # deterministic sample warehouse (6k orders)
-python run_all_tests.py         # all 3 suites must pass
+python run_all_tests.py         # all 4 suites must pass
 ```
 
 No API keys, no network, no ML dependencies — the default selector is rule-based over the semantic model's synonyms. Install time is seconds, not minutes.
@@ -127,11 +127,25 @@ Every answer carries the SQL, the metric definitions used, the filters applied, 
 
 ---
 
-## Bugs found while building
+## Bugs found
 
-**"What was our revenue last month?" returned 31 daily rows instead of one number.** The word "month" inside the date phrase "last month" matched the `order_date` dimension synonym, so a time *filter* was read as a request to *group by* month. A time filter and a time grouping are different requests, and the phrase expressing one must not be readable as the other. Fixed by masking date phrases before dimension matching; the golden set now pins this case.
+Seven real defects. **Five came from an adversarial audit run against the working system, after the test suite was already green** — which is the argument for auditing separately from writing tests.
 
-**A test's control assertion was inert.** In the frozen-report test I patched `selector.select` to simulate interpretation drift — but `answer.py` does `from .selector import select`, so it holds its own reference and the patch never reached it. The main assertion passed, but the control that was supposed to prove *the drift was real* proved nothing. Same class of mistake as the voice project's eval hiding a broken middle: a check that looks like proof and isn't.
+**Scheduled reports served stale cached data.** `reports.run()` went through the interactive result cache, so Monday's report could silently be Friday's numbers. Worse: my own frozen-report test asserted "repeated runs agree", which would have passed *because of the cache* rather than because of determinism. A test passing for the wrong reason.
+
+**The result cache grew without bound.** Payloads hold full row sets; there was a TTL but no size cap. A slow memory leak that only surfaces once the process is large.
+
+**A filtered dimension also became a grouping.** `"revenue by region from the phone channel"` grouped by channel *and* region, because the logic checked for `"by"` anywhere in the question. Now only dimensions named after a breakdown keyword count.
+
+**Zero-row answers printed a blank table** — bare headers with nothing under them, which reads as a bug rather than an answer.
+
+**The cost check was itself expensive** — four `COUNT(*)` scans per query to estimate cost.
+
+Plus two found while building:
+
+**"What was our revenue last month?" returned 31 daily rows instead of one number.** "Month" inside the date phrase matched the `order_date` dimension synonym, so a time *filter* was read as a *grouping*. It produced a plausible daily revenue chart — nobody would have questioned it.
+
+**A test's control assertion was inert.** I patched `selector.select` to simulate drift, but `answer.py` does `from .selector import select` and holds its own reference. The check meant to prove the drift was real proved nothing — same class as the voice project's eval hiding a broken middle.
 
 ---
 

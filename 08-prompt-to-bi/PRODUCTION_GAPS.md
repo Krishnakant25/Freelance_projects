@@ -27,7 +27,41 @@ But `answer.py` does `from .selector import select`, binding its own reference �
 
 This is the same class of mistake as the voice project's eval hiding a broken middle: **a check that looks like proof and isn't.** Two projects in, it's clearly a pattern worth watching for rather than a one-off.
 
-### 1.3 Also handled during the build
+### 1.3 Scheduled reports served STALE CACHED data
+
+`reports.run()` went through the interactive result cache, so running a report twice inside the TTL returned rows from the earlier run without re-querying.
+
+A scheduled report exists to deliver **fresh** data. Serving it from cache means Monday's report can silently be Friday's numbers — a stale figure that still looks authoritative, which is the same class of failure as the query drift this module was built to prevent.
+
+Worse, my own frozen-report test asserted *"repeated runs of a frozen report agree"* — which would have passed **because of the cache** rather than because of determinism, if the harness hadn't happened to disable caching. A test passing for the wrong reason.
+
+**Fixed:** `run_selection(use_cache=False)` for reports. Interactive questions still cache (verified separately, so the fix didn't disable caching wholesale).
+
+### 1.4 The result cache grew without bound
+
+Cached payloads contain **full row sets**, and the cache had a TTL but no size limit. A busy day of distinct questions grew it indefinitely and never released the memory until restart — a slow leak that only surfaces once the process is large.
+
+**Fixed:** `CACHE_MAX_ENTRIES` with LRU eviction, plus `cache_stats()` for observability. Verified with 25 distinct queries against a cap of 5: entries stayed at 5, evictions fired.
+
+### 1.5 A filtered dimension also became a grouping
+
+`"revenue by region from the phone channel"` grouped by **channel AND region**. The logic checked whether the question contained `"by"` *anywhere*, so the literal word "channel" plus a `by` produced an unwanted grouping — answering a different question than the one asked.
+
+**Fixed:** only dimensions named *after* a breakdown keyword (`by`, `per`, `split by`…) and before the next clause boundary count as groupings. Verified that `"revenue by channel"` still groups (the fix didn't over-correct) and that an explicit `"by channel from the mobile app"` still groups on channel deliberately.
+
+### 1.6 Zero-row answers printed a blank table
+
+An empty result showed bare column headers with nothing underneath, which reads like a bug rather than an answer. The query was valid; the period simply had no matching rows.
+
+**Fixed:** an explicit *"No data matched that question — the query ran successfully"* message, while still showing the derivation, because "why is this empty?" is almost always a question about the filters.
+
+### 1.7 The cost check was itself expensive
+
+`estimate_scan()` ran four `COUNT(*)` scans on **every query** to estimate cost — so the guardrail meant to prevent expensive queries was one of the more expensive things the system did.
+
+**Fixed:** memoized per process, invalidated on re-seed (verified — memoizing without invalidation would leave the estimator using stale table sizes forever).
+
+### 1.8 Also handled during the build
 
 - **Synonym collisions are rejected at model load.** If "revenue" mapped to two metrics, selection would be order-dependent and therefore unpredictable. `_validate()` refuses to load such a model.
 - **Longest-synonym-first matching**, so `"average order value"` doesn't resolve to `order_count` because it contains "order". Pinned by `aov-longest-synonym-wins`.
@@ -119,7 +153,7 @@ Same deferred bottleneck as the other projects: the result cache is per-process.
 
 | | Count |
 |---|---|
-| Defects found and fixed | 2 significant + 4 handled inline |
+| Defects found and fixed | 7 (5 from the adversarial audit) + 4 handled inline |
 | Production gaps documented | 10 |
 | Of those, security-critical | 2 (§2.2 row-level security, §2.5 auth) |
 | Of those, needing client data/schema | 3 (§2.4, §2.6, §2.8) |

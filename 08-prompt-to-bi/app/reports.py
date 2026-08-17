@@ -202,7 +202,13 @@ def run(name: str, model: Optional[semantic.SemanticModel] = None) -> answer_mod
         selection = _selection_from_json(row["selection_json"])
         question = row["question"]
 
-    result = answer_mod.run_selection(selection, question=question, model=model)
+    # use_cache=False: a scheduled report must query fresh data. Serving it from
+    # the interactive result cache means Monday's report can silently be Friday's
+    # numbers — a stale figure that looks authoritative, which is the same class
+    # of failure as the drift this whole module exists to prevent.
+    result = answer_mod.run_selection(
+        selection, question=question, model=model, use_cache=False
+    )
 
     primary = None
     if result.ok and result.rows:

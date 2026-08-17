@@ -14,6 +14,7 @@ PY = sys.executable
 SUITES = [
     ("SQL safety (read-only, injection, cost ceilings)", ["eval/test_sql_safety.py"]),
     ("Frozen reports (no silent drift)", ["eval/test_reports.py"]),
+    ("Production audit regressions", ["eval/test_production_fixes.py"]),
     ("Golden queries (structure + consistency)", ["eval/run_eval.py"]),
 ]
 

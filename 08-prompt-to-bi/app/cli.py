@@ -51,7 +51,15 @@ def _print_answer(a, show_sql: bool = False, show_plan: bool = False):
     chart = a.chart or {}
 
     print()
-    if chart.get("type") == "stat":
+    if a.row_count == 0:
+        # A bare table header with nothing under it reads like a bug. Say plainly
+        # that the query was valid and the period simply has no matching data —
+        # and still show the derivation, since "why is this empty?" is usually a
+        # question about the filters.
+        print("  No data matched that question.")
+        print("  The query ran successfully — there are simply no rows for this")
+        print("  combination of period and filters.")
+    elif chart.get("type") == "stat":
         print(f"  {chart['label']}: {charts.format_value(chart['value'], chart['format'])}")
     else:
         widths = {c: max(len(c), 12) for c in a.columns}

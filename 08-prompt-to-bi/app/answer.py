@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
@@ -65,7 +66,12 @@ class Answer:
 # --- Result cache ---------------------------------------------------------
 
 _cache_lock = threading.Lock()
-_cache: dict[str, tuple[float, dict]] = {}
+# OrderedDict so eviction is LRU. A plain dict with only a TTL grew without
+# bound: entries store full ROW SETS, so a busy day of distinct questions is a
+# steady memory leak that never triggers until the process is large.
+_cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+
+_cache_stats = {"hits": 0, "misses": 0, "evictions": 0}
 
 
 def _cache_key(sql: str, params: list) -> str:
@@ -78,11 +84,15 @@ def _cache_get(key: str) -> Optional[dict]:
     with _cache_lock:
         entry = _cache.get(key)
         if entry is None:
+            _cache_stats["misses"] += 1
             return None
         stored_at, payload = entry
         if time.monotonic() - stored_at > config.CACHE_TTL_SECONDS:
             del _cache[key]
+            _cache_stats["misses"] += 1
             return None
+        _cache.move_to_end(key)
+        _cache_stats["hits"] += 1
         return payload
 
 
@@ -91,11 +101,26 @@ def _cache_set(key: str, payload: dict) -> None:
         return
     with _cache_lock:
         _cache[key] = (time.monotonic(), payload)
+        _cache.move_to_end(key)
+        while len(_cache) > config.CACHE_MAX_ENTRIES:
+            _cache.popitem(last=False)
+            _cache_stats["evictions"] += 1
 
 
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+
+
+def cache_stats() -> dict:
+    with _cache_lock:
+        total = _cache_stats["hits"] + _cache_stats["misses"]
+        return {
+            "entries": len(_cache),
+            "max_entries": config.CACHE_MAX_ENTRIES,
+            **_cache_stats,
+            "hit_rate": round(_cache_stats["hits"] / total, 3) if total else 0.0,
+        }
 
 
 # --- Main entry point -----------------------------------------------------
@@ -137,6 +162,7 @@ def run_selection(
     question: str = "",
     model: Optional[semantic.SemanticModel] = None,
     started: Optional[float] = None,
+    use_cache: bool = True,
 ) -> Answer:
     """Executes an already-validated Selection.
 
@@ -144,6 +170,12 @@ def run_selection(
     Selection rather than re-interpreting the question — see app/reports.py and
     doc §6.5 on why regenerating a scheduled query lets trends drift for
     non-business reasons.
+
+    `use_cache=False` exists for scheduled reports. Serving a report from cache
+    defeats its purpose: the whole point of a scheduled run is fresh data, and a
+    cached row set means the "Monday report" can silently be Friday's numbers.
+    The cache is a latency optimisation for interactive questions, not something
+    a scheduled job should ever read.
     """
     model = model or get_model()
     started = started or time.perf_counter()
@@ -151,12 +183,13 @@ def run_selection(
     built = sql_builder.build(selection, model)
     key = _cache_key(built.sql, built.params)
 
-    cached_payload = _cache_get(key)
-    if cached_payload is not None:
-        answer = Answer(**cached_payload)
-        answer.cached = True
-        answer.elapsed_ms = (time.perf_counter() - started) * 1000
-        return answer
+    if use_cache:
+        cached_payload = _cache_get(key)
+        if cached_payload is not None:
+            answer = Answer(**cached_payload)
+            answer.cached = True
+            answer.elapsed_ms = (time.perf_counter() - started) * 1000
+            return answer
 
     try:
         qr = guardrails.execute(built.sql, built.params)
@@ -198,8 +231,9 @@ def run_selection(
         truncated=qr.truncated,
     )
 
-    payload = asdict(answer)
-    payload.pop("cached", None)
-    payload.pop("elapsed_ms", None)
-    _cache_set(key, {**payload, "cached": False, "elapsed_ms": 0.0})
+    if use_cache:
+        payload = asdict(answer)
+        payload.pop("cached", None)
+        payload.pop("elapsed_ms", None)
+        _cache_set(key, {**payload, "cached": False, "elapsed_ms": 0.0})
     return answer

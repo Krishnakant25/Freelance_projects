@@ -20,8 +20,10 @@ the wrong layer and trivially bypassable; it exists nowhere in this file.
 import logging
 import re
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 from . import config, warehouse
 
@@ -64,6 +66,38 @@ def _assert_single_read_statement(sql: str) -> None:
         raise GuardrailViolation("query must be a SELECT or WITH")
 
 
+_COUNT_TABLES = ("orders", "order_items", "customers", "products")
+
+_counts_lock = threading.Lock()
+_cached_counts: Optional[dict[str, int]] = None
+
+
+def invalidate_table_counts() -> None:
+    """Call after re-seeding the warehouse."""
+    global _cached_counts
+    with _counts_lock:
+        _cached_counts = None
+
+
+def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Memoized row counts used by the cost estimator.
+
+    These were previously recomputed on EVERY query — four extra COUNT(*)
+    scans per user question, meaning the cost check was itself one of the more
+    expensive things the system did. Table sizes change only on ingest, so
+    caching them per process is correct as well as faster; call
+    invalidate_table_counts() after a re-seed.
+    """
+    global _cached_counts
+    with _counts_lock:
+        if _cached_counts is None:
+            _cached_counts = {
+                t: conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+                for t in _COUNT_TABLES
+            }
+        return _cached_counts
+
+
 def estimate_scan(conn: sqlite3.Connection, sql: str, params: list) -> tuple[int, list[str]]:
     """Uses EXPLAIN QUERY PLAN plus table row counts to estimate scanned rows.
 
@@ -74,9 +108,7 @@ def estimate_scan(conn: sqlite3.Connection, sql: str, params: list) -> tuple[int
     plan_rows = conn.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()
     plan = [r["detail"] if "detail" in r.keys() else str(tuple(r)) for r in plan_rows]
 
-    counts = {}
-    for table in ("orders", "order_items", "customers", "products"):
-        counts[table] = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
+    counts = _table_counts(conn)
 
     estimate = 0
     for line in plan:

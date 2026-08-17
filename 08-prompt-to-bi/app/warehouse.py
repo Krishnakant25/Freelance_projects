@@ -229,6 +229,10 @@ def seed(seed_value: int = None, days: int = None, order_count: int = None) -> d
         )
         conn.commit()
 
+        # Table sizes changed — drop the memoized counts used by the cost estimator.
+        from . import guardrails
+        guardrails.invalidate_table_counts()
+
         return {
             "customers": len(customers),
             "products": len(products),

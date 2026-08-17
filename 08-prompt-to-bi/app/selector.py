@@ -176,6 +176,36 @@ def _wants_trend(text: str) -> bool:
     return any(re.search(p, lowered) for p in _TREND_HINTS)
 
 
+_BREAKDOWN_KEYWORDS = r"\b(?:by|per|broken\s+down\s+by|split\s+by|across)\b"
+
+
+def _dimensions_after_breakdown_keyword(question: str, model: SemanticModel) -> set[str]:
+    """Dimensions the user actually asked to GROUP BY.
+
+    Only the text following a breakdown keyword ("by", "per", "split by", …) is
+    considered, and only up to the next clause boundary — so in
+    "revenue by region from the phone channel", `region` is a grouping and
+    `channel` is not, even though both dimension words appear.
+    """
+    lowered = question.lower()
+    requested: set[str] = set()
+
+    for match in re.finditer(_BREAKDOWN_KEYWORDS, lowered):
+        # Look at the span after the keyword, stopping at a clause boundary that
+        # signals a filter or time phrase rather than another grouping.
+        tail = lowered[match.end():]
+        boundary = re.search(r"\b(?:from|for|in|with|where|during|last|this|yesterday|today)\b", tail)
+        segment = tail[: boundary.start()] if boundary else tail
+
+        for dim in model.dimensions.values():
+            names = [dim.name.replace("_", " "), dim.name] + dim.synonyms
+            for term in names:
+                if re.search(rf"(?<![a-z]){re.escape(term.lower())}(?![a-z])", segment):
+                    requested.add(dim.name)
+                    break
+    return requested
+
+
 def _match_filters(text: str, model: SemanticModel) -> list[Filter]:
     lowered = text.lower()
     filters: list[Filter] = []
@@ -250,12 +280,23 @@ def _rule_based_select(question: str, model: SemanticModel):
 
     filters = _match_filters(question, model)
 
-    # A dimension used purely as a filter shouldn't also become a GROUP BY.
-    # "revenue from mobile app" wants one number, not a breakdown by channel.
+    # A dimension used purely as a FILTER must not also become a GROUP BY.
+    #
+    # The earlier version only checked whether the question contained "by"
+    # anywhere, which broke on "revenue by region from the phone channel":
+    # the literal word "channel" matched the channel dimension, a "by" was
+    # present, so it grouped by channel AND region — answering a different
+    # question than the one asked.
+    #
+    # A dimension is a grouping only if it is actually named in the
+    # breakdown clause. Everything else that produced a filter is filter-only.
     filtered_dims = {f.dimension for f in filters}
-    explicit_breakdown = re.search(r"\bby\b|\bper\b|\bbreak\s*down\b|\bsplit\b|\bacross\b", question.lower())
-    if not explicit_breakdown:
-        dimensions = [d for d in dimensions if d not in filtered_dims]
+    if filtered_dims:
+        requested_groupings = _dimensions_after_breakdown_keyword(question, model)
+        dimensions = [
+            d for d in dimensions
+            if d not in filtered_dims or d in requested_groupings
+        ]
 
     order_by = metrics[0] if dimensions and not any(
         model.dimensions[d].time_dimension for d in dimensions

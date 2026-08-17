@@ -56,8 +56,15 @@ MAX_SCAN_ROWS = _get_int("MAX_SCAN_ROWS", 5_000_000)
 QUERY_TIMEOUT_SECONDS = _get_int("QUERY_TIMEOUT_SECONDS", 15)
 
 # --- Result cache ---
+# Interactive questions only. Scheduled reports deliberately BYPASS this (see
+# reports.run) — serving a scheduled report from cache means Monday's report can
+# silently be Friday's numbers.
 CACHE_ENABLED = _get_bool("CACHE_ENABLED", True)
 CACHE_TTL_SECONDS = _get_int("CACHE_TTL_SECONDS", 300)
+# Hard entry cap with LRU eviction. Cached payloads contain full ROW SETS, so a
+# TTL alone is not enough: a busy day of distinct questions grew the cache
+# without bound and never released it until restart.
+CACHE_MAX_ENTRIES = _get_int("CACHE_MAX_ENTRIES", 200)
 
 # --- Defaults ---
 DEFAULT_DATE_RANGE = os.getenv("DEFAULT_DATE_RANGE", "last_30_days")
