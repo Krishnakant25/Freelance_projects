@@ -1,0 +1,16 @@
+# Secrets - never commit
+keys.json
+.env
+.env.*
+
+# Runtime state
+data/audit.jsonl
+data/tool_manifest.json
+data/undo/
+workspace/
+private/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
